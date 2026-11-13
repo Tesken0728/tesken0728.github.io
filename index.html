@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#132944">
+<title>PDA 出貨核對</title>
+<style>
+:root{font:16px/1.55 system-ui,"Microsoft JhengHei",sans-serif;color:#142b46;background:#edf2f7}
+*{box-sizing:border-box}body{margin:0}header{background:#132944;color:white;padding:1rem 1.25rem}
+header>div,main{max-width:660px;margin:auto}h1,h2,p{margin:0}h1{font-size:1.35rem}h2{font-size:1.08rem}
+main{padding:.85rem;display:grid;gap:.8rem}nav{display:flex;gap:.35rem;margin-top:.6rem}
+nav span{flex:1;font-size:.81rem;border-top:3px solid #526985;padding-top:.35rem;color:#d8e5f5}
+nav [aria-current]{border-color:#85baff;color:white;font-weight:700}
+section,.panel{background:#fff;border:1px solid #d6e1ed;border-radius:12px;padding:.9rem}
+section>*+*,.panel>*+*{margin-top:.65rem}form{display:grid;gap:.65rem}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}
+label{display:grid;gap:.2rem;font-size:.9rem;font-weight:650}
+input{font:inherit;color:#142b46;padding:.65rem;border:1px solid #8196ac;border-radius:7px;min-width:0;width:100%}
+button{border:0;border-radius:8px;background:#2056a7;color:#fff;padding:.65rem .8rem;min-height:44px;font:inherit;font-weight:700;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:3px solid #538ae4;outline-offset:2px}
+button:disabled{opacity:.48;cursor:default}.secondary{background:#e4edf8;color:#183f76}.danger{background:#a72637}
+.muted{color:#466078;font-size:.9rem}.error{color:#9c2333;font-weight:650}.ok{color:#155f3a}
+.status{background:#dceafa;padding:.65rem .8rem;border-radius:8px;font-weight:700}
+.result{min-height:7.5rem;display:grid;align-content:center;text-align:center;background:#f0f4f9;overflow-wrap:anywhere}
+.result strong{font-size:2rem;line-height:1.2}.result.ok{background:#dcf4e6}.result.error{background:#ffeaec}
+footer{position:sticky;bottom:0;background:#edf2f7;padding:.45rem 0;display:grid;gap:.45rem}
+output{display:block}li{padding:.25rem 0;overflow-wrap:anywhere}ol,ul{padding-left:1.35rem;margin-bottom:0}li button{margin:.25rem 0}
+[hidden]{display:none!important}
+@media(max-width:350px){.grid{grid-template-columns:1fr}header{padding:.75rem}}
+</style>
+</head>
+<body>
+<header><div><h1>PDA 出貨核對</h1><nav aria-label="操作進度">
+<span aria-current="step">出貨設定</span><span>工單範圍</span><span>刷碼抽查</span>
+</nav></div></header>
+<main>
+<section id="setup">
+<h2>出貨設定</h2>
+<form id="setup-form">
+<label>總出貨 PCS<input name="total" required placeholder="例如 20K"></label>
+<div class="grid">
+<label>每滿箱盒數<input name="perCarton" inputmode="numeric" required></label>
+<label>每盒 PCS<input name="perBox" inputmode="numeric" required></label>
+<label>外箱起號<input name="outerFirst" inputmode="numeric" required></label>
+<label>外箱迄號<input name="outerLast" inputmode="numeric" required></label>
+<label>外標每次遞增<input name="outerStep" inputmode="numeric" required></label>
+<label>內標每次遞增<input name="innerStep" inputmode="numeric" required></label>
+<label>成品存貨代碼<input name="stock" required></label>
+<label>內外標原材料號<input name="material" required maxlength="14"></label>
+</div>
+<p class="muted">起迄號填標籤上的完整流水號。遞增量依實刷結果填寫，例如 0000100 → 0000200 就填 100。</p>
+<output id="setup-message" aria-live="polite"></output>
+<button>下一步 · 設定工單</button>
+<button type="button" class="secondary" id="demo">載入測試資料</button>
+</form>
+</section>
+<section id="orders" hidden>
+<h2>登記工單與內標範圍</h2>
+<p class="muted">依出貨明細的裝箱順序新增。工單欄可輸入「工單,Lot」，也可貼成品標籤原文。</p>
+<p id="order-count" class="status"></p>
+<form id="order-form" autocomplete="off">
+<label>工單 QR 或成品原文<input name="order" required></label>
+<div class="grid">
+<label>內標起號<input name="first" inputmode="numeric" required></label>
+<label>內標迄號<input name="last" inputmode="numeric" required></label>
+</div>
+<button>新增工單範圍</button>
+</form>
+<p id="order-message" class="error" role="alert"></p>
+<ol id="order-list"></ol>
+<button id="begin">確認，開始核對</button>
+<button class="secondary" data-back="0">返回出貨設定</button>
+</section>
+<section id="audit" hidden>
+<h2>出貨抽查</h2>
+<p class="status" id="scan-step"></p>
+<p id="active-carton" class="muted"></p>
+<form id="scan-form" autocomplete="off">
+<label>掃碼原文<input name="barcode" autocapitalize="off" spellcheck="false" required></label>
+<button>送出</button>
+</form>
+<div id="result" class="panel result" role="status"><strong id="result-title"></strong><p id="result-text"></p></div>
+<details id="carton-details" hidden><summary>查看本箱應有的內標範圍</summary><ul id="carton-orders"></ul></details>
+<footer>
+<button id="next" class="danger">下一箱</button>
+<button class="secondary" data-back="1">返回工單設定</button>
+</footer>
+</section>
+</main>
+<script>
+"use strict";
+const byId = id => document.getElementById(id);
+const setup = byId("setup-form"), orderForm = byId("order-form"), scanForm = byId("scan-form");
+const barcode = scanForm.elements.barcode;
+let shipment = null, orders = [], demo = false, page = 0;
+let carton = null, product = null, scanStep = 0;
+const maxSerial = 9999999;
+
+function number(text) {
+    const value = String(text).trim();
+    if (!/^\d+$/.test(value)) return NaN;
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : NaN;
+}
+function quantity(text) {
+    const match = /^(\d+)\s*(k)?$/i.exec(text.trim().replace(/,/g, ""));
+    if (!match) return NaN;
+    return number(match[1]) * (match[2] ? 1000 : 1);
+}
+function serialRange(first, last, increment) {
+    const start = number(first), end = number(last);
+    if (!(start >= 0 && end <= maxSerial && end >= start && increment > 0)) return null;
+    if ((end - start) % increment !== 0) return null;
+    return {start, end, increment, count: (end - start) / increment + 1};
+}
+function productLabel(raw) {
+    const [stock, lot, date, order, pcs, ...extra] = raw.trim().split(/\s+/);
+    const qty = number(pcs);
+    if (!stock || !lot || !/^\d{8}$/.test(date || "") || !order || !(qty > 0) || extra.length) return null;
+    return {stock, lot, date, order, qty};
+}
+function shippingLabel(raw) {
+    const text = raw.trim();
+    if (text.length !== 36 || !/^\d{19}$/.test(text.slice(17))) return null;
+    return {
+        material: text.slice(0, 14), code: text.slice(14, 17), date: text.slice(17, 24),
+        qty: number(text.slice(24, 29)), serial: number(text.slice(29))
+    };
+}
+function rangesForCarton(outerSerial, settings, entries) {
+    const index = (outerSerial - settings.outer.start) / settings.outer.increment;
+    const firstBox = index * settings.perCarton, lastBox = firstBox + settings.perCarton;
+    let position = 0;
+    const ranges = [];
+    for (const entry of entries) {
+        const end = position + entry.count;
+        const startOverlap = Math.max(firstBox, position);
+        const endOverlap = Math.min(lastBox, end);
+        if (startOverlap < endOverlap) {
+            ranges.push({...entry, start: entry.start + (startOverlap - position) * entry.increment,
+                end: entry.start + (endOverlap - position - 1) * entry.increment});
+        }
+        position = end;
+        if (position >= lastBox) break;
+    }
+    return ranges;
+}
+const includes = (range, serial) => serial >= range.start && serial <= range.end &&
+    (serial - range.start) % range.increment === 0;
+const format = n => String(n).padStart(7, "0");
+function showPage(index) {
+    page = index;
+    ["setup", "orders", "audit"].forEach((name, i) => byId(name).hidden = i !== index);
+    document.querySelectorAll("nav span").forEach((item, i) => {
+        if (i === index) item.setAttribute("aria-current", "step");
+        else item.removeAttribute("aria-current");
+    });
+    if (index === 1) renderOrders();
+    if (index === 2) resetCarton();
+    window.scrollTo(0, 0);
+}
+function readSetup() {
+    const values = Object.fromEntries(new FormData(setup));
+    const total = quantity(values.total), perCarton = number(values.perCarton), perBox = number(values.perBox);
+    const outerStep = number(values.outerStep), innerStep = number(values.innerStep);
+    const outer = serialRange(values.outerFirst, values.outerLast, outerStep);
+    if (![total, perCarton, perBox, outerStep, innerStep, perCarton * perBox]
+            .every(n => Number.isSafeInteger(n) && n > 0)) {
+        return {error: "請填有效的出貨數量、盒數和流水號遞增量。"};
+    }
+    const stock = values.stock.trim(), material = values.material.trim();
+    if (!stock || material.length !== 14) return {error: "請填成品存貨代碼和 14 字元的原材料號。"};
+    const cartons = Math.ceil(total / (perCarton * perBox)), boxes = Math.ceil(total / perBox);
+    if (!outer) return {error: "請確認外箱起迄號和遞增量，迄號必須落在設定的遞增序列。"};
+    if (outer.count !== cartons) return {error: "應有 " + cartons + " 張外標，設定範圍有 " + outer.count + " 張。"};
+    return {total, perCarton, perBox, outer, innerStep, stock, material, cartons, boxes};
+}
+function setupSummary() {
+    const candidate = readSetup();
+    const output = byId("setup-message");
+    output.className = candidate.error ? "error" : "ok";
+    output.textContent = candidate.error || (
+        candidate.cartons + " 箱 · " + candidate.boxes + " 張內標 · 末箱 " +
+        ((candidate.total - 1) % (candidate.perCarton * candidate.perBox) + 1) + " PCS"
+    );
+    return candidate;
+}
+setup.addEventListener("input", setupSummary);
+setup.addEventListener("submit", event => {
+    event.preventDefault();
+    const candidate = setupSummary();
+    if (candidate.error) return;
+    if (shipment && shipment.innerStep !== candidate.innerStep && orders.length) {
+        byId("setup-message").textContent = "請先用原設定返回工單頁，移除已登記範圍，再更改內標遞增量。";
+        byId("setup-message").className = "error";
+        return;
+    }
+    shipment = candidate;
+    showPage(1);
+});
+function renderOrders() {
+    const count = orders.reduce((sum, entry) => sum + entry.count, 0);
+    byId("order-count").textContent = "內標 " + count + "／" + shipment.boxes + " 張";
+    byId("begin").disabled = count !== shipment.boxes || Array.from(orderForm.querySelectorAll("input")).some(i => i.value.trim());
+    const list = byId("order-list");
+    list.replaceChildren();
+    orders.forEach((entry, index) => {
+        const item = document.createElement("li");
+        item.textContent = entry.order + "／" + entry.lot + " · " + format(entry.start) + "～" + format(entry.end);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "secondary";
+        remove.textContent = "移除";
+        remove.onclick = () => { orders.splice(index, 1); renderOrders(); };
+        item.append(document.createElement("br"), remove);
+        list.append(item);
+    });
+}
+orderForm.addEventListener("input", renderOrders);
+orderForm.addEventListener("submit", event => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(orderForm));
+    const label = productLabel(values.order);
+    const fields = values.order.split(",").map(part => part.trim());
+    const identity = label || (fields.length === 2 && fields.every(Boolean) ? {order: fields[0], lot: fields[1]} : null);
+    const range = serialRange(values.first, values.last, shipment.innerStep);
+    let error = "";
+    if (!identity) error = "請填工單與 Lot，或貼上完整成品標籤。";
+    else if (label && label.stock !== shipment.stock) error = "成品存貨代碼與出貨設定不符。";
+    else if (!range) error = "內標起迄號與遞增量不相符。";
+    else if (orders.some(entry => entry.start <= range.end && range.start <= entry.end)) error = "內標範圍與已登記範圍重疊。";
+    byId("order-message").textContent = error;
+    if (error) return;
+    orders.push({...identity, ...range});
+    orderForm.reset();
+    renderOrders();
+    orderForm.elements.order.focus();
+});
+byId("begin").onclick = () => showPage(2);
+document.querySelectorAll("[data-back]").forEach(button => {
+    button.onclick = () => showPage(Number(button.dataset.back));
+});
+byId("demo").onclick = () => {
+    if (orders.length && !window.confirm("載入範例會取代目前登記的工單，是否繼續？")) return;
+    const values = {total:"150", perCarton:"2", perBox:"50", outerFirst:"0000100", outerLast:"0000200",
+        outerStep:"100", innerStep:"100", stock:"DEMO-ITEM", material:"DEMO-MATERIAL1"};
+    for (const [name, value] of Object.entries(values)) setup.elements[name].value = value;
+    shipment = setupSummary();
+    orders = [
+        {order:"DEMO-A", lot:"LOT-A", ...serialRange("0000100", "0000100", 100)},
+        {order:"DEMO-B", lot:"LOT-B", ...serialRange("0000200", "0000300", 100)}
+    ];
+    demo = true;
+    orderForm.reset();
+    byId("order-message").textContent = "";
+    showPage(1);
+};
+setup.addEventListener("input", () => { demo = false; });
+
+function updateScan() {
+    byId("scan-step").textContent = ["請刷外箱標籤", "請刷抽中那盒的成品標籤", "請刷同一盒的出貨內標"][scanStep];
+    byId("active-carton").textContent = carton ? "目前外箱 " + format(carton.serial) : "等待刷碼";
+    byId("next").disabled = !carton;
+    byId("carton-details").hidden = !carton;
+    const list = byId("carton-orders");
+    list.replaceChildren();
+    if (carton) for (const entry of carton.ranges) {
+        const li = document.createElement("li");
+        li.textContent = entry.order + "／" + entry.lot + " · " + format(entry.start) + "～" + format(entry.end);
+        list.append(li);
+    }
+}
+function result(pass, message) {
+    byId("result").className = "panel result " + (pass === null ? "" : pass ? "ok" : "error");
+    byId("result-title").textContent = pass === null ? "等待核對" : pass ? "OK" : "NG";
+    byId("result-text").textContent = message;
+}
+function resetCarton() {
+    carton = null;
+    product = null;
+    scanStep = 0;
+    barcode.value = "";
+    byId("carton-details").open = false;
+    result(null, demo ? "範例資料 · 請先輸入外箱測試條碼" : "");
+    updateScan();
+    barcode.focus({preventScroll:true});
+}
+function audit(raw) {
+    if (scanStep === 0) {
+        const outer = shippingLabel(raw);
+        if (!outer) return result(false, "請刷完整外箱標籤。");
+        if (outer.material !== shipment.material) return result(false, "外標原材料號不符。");
+        if (!includes(shipment.outer, outer.serial)) return result(false, "外箱流水號不在本單設定範圍。");
+        const capacity = shipment.perCarton * shipment.perBox;
+        const index = (outer.serial - shipment.outer.start) / shipment.outer.increment;
+        const expected = Math.min(capacity, shipment.total - index * capacity);
+        if (outer.qty !== expected) return result(false, "外箱數量不符，應為 " + expected + " PCS。");
+        carton = {...outer, ranges:rangesForCarton(outer.serial, shipment, orders)};
+        scanStep = 1;
+        return result(null, "外箱已確認");
+    }
+    if (scanStep === 1) {
+        const candidate = productLabel(raw);
+        if (!candidate) return result(false, "請刷完整成品標籤。");
+        if (candidate.stock !== shipment.stock) return result(false, "成品存貨代碼不符。");
+        if (!carton.ranges.some(entry => entry.order === candidate.order && entry.lot === candidate.lot)) {
+            return result(false, "成品工單或 Lot 不屬於本箱。");
+        }
+        product = candidate;
+        scanStep = 2;
+        return result(null, candidate.order + "／" + candidate.lot);
+    }
+    const inner = shippingLabel(raw);
+    const matched = inner && carton.ranges.find(entry => entry.order === product.order &&
+        entry.lot === product.lot && includes(entry, inner.serial));
+    let error = "";
+    if (!inner) error = "請刷完整出貨內標。";
+    else if (inner.material !== carton.material || inner.code !== carton.code || inner.date !== carton.date) {
+        error = "內外標的原材料號、出貨代碼或日期不符。";
+    } else if (!matched) error = "內標流水號不屬於本箱的這筆工單與 Lot。";
+    else {
+        const finalRange = orders[orders.length - 1];
+        const isLastBox = finalRange.order === product.order && finalRange.lot === product.lot &&
+            inner.serial === finalRange.end;
+        const expected = isLastBox ? (shipment.total - 1) % shipment.perBox + 1 : shipment.perBox;
+        if (inner.qty !== expected || inner.qty !== product.qty) error = "每盒 PCS 與成品標籤或出貨設定不符。";
+    }
+    const identity = product.order + "／" + product.lot;
+    product = null;
+    scanStep = 1;
+    result(!error, error || identity + " · 內標 " + format(inner.serial));
+}
+scanForm.addEventListener("submit", event => {
+    event.preventDefault();
+    if (page !== 2 || !barcode.value.trim()) return;
+    audit(barcode.value);
+    barcode.value = "";
+    updateScan();
+    barcode.focus({preventScroll:true});
+});
+byId("next").onclick = resetCarton;
+</script>
+</body>
+</html>
